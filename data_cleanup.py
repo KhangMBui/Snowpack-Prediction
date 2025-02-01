@@ -11,16 +11,18 @@ def load_data():
   srad = pd.read_csv('./input_data/meteorological_data/Modified_Output_SRAD.csv')
   tmin = pd.read_csv('./input_data/meteorological_data/Modified_Output_tmin.csv')
   tmax = pd.read_csv('./input_data/meteorological_data/Modified_Output_tmax.csv')
+  rmin = pd.read_csv('./input_data/meteorological_data/Modified_Output_Rmin.csv')
+  rmax = pd.read_csv('./input_data/meteorological_data/Modified_Output_Rmax.csv')
   sph = pd.read_csv('./input_data/meteorological_data/Modified_Output_SPH.csv')
 
   # Load SWE data and Station Info
   station_info = pd.read_csv('./input_data/swe_data/Station_Info.csv')
   swe_values = pd.read_csv('./input_data/swe_data/SWE_values_all.csv')
 
-  return windspeed, precip, srad, tmin, tmax, sph, station_info, swe_values
+  return windspeed, precip, srad, tmin, tmax, rmin, rmax, sph, station_info, swe_values
 
 # 2. Handle Missing Values (Imputation)
-def handle_missing_values(windspeed, precip, srad, tmin, tmax, sph):
+def handle_missing_values(windspeed, precip, srad, tmin, tmax, rmin, rmax, sph):
   # Use mean imputation for missing values
   imputer = SimpleImputer(strategy='mean')
   
@@ -30,9 +32,11 @@ def handle_missing_values(windspeed, precip, srad, tmin, tmax, sph):
   srad['variable_value'] = imputer.fit_transform(srad[['variable_value']])
   tmin['variable_value'] = imputer.fit_transform(tmin[['variable_value']])
   tmax['variable_value'] = imputer.fit_transform(tmax[['variable_value']])
+  rmin['variable_value'] = imputer.fit_transform(rmin[['variable_value']])
+  rmax['variable_value'] = imputer.fit_transform(rmax[['variable_value']])
   sph['variable_value'] = imputer.fit_transform(sph[['variable_value']])
   
-  return windspeed, precip, srad, tmin, tmax, sph
+  return windspeed, precip, srad, tmin, tmax, rmin, rmax, sph
 
 # 3. Spatial Association of SNOTEL Locations to Grids
 def associate_snotel_to_grids(station_info, windspeed, precip, srad, tmin, tmax, sph):
@@ -52,7 +56,7 @@ def associate_snotel_to_grids(station_info, windspeed, precip, srad, tmin, tmax,
   return station_info
 
 # 4. Combine Data (Attach Static and Meteorological Features to Each SNOTEL Station)
-def combine_data(station_info, windspeed, precip, srad, tmin, tmax, sph, swe_values):
+def combine_data(station_info, windspeed, precip, srad, tmin, tmax, rmin, rmax, sph, swe_values):
    # Merge station_info with swe_values based on Latitude and Longitude
   station_info = pd.merge(station_info, swe_values[['Latitude', 'Longitude', 'SWE']], on=['Latitude', 'Longitude'], how='left')
   
@@ -69,6 +73,8 @@ def combine_data(station_info, windspeed, precip, srad, tmin, tmax, sph, swe_val
     srad_data = srad.iloc[grid_index]
     tmin_data = tmin.iloc[grid_index]
     tmax_data = tmax.iloc[grid_index]
+    rmin_data = rmin.iloc[grid_index]
+    rmax_data = rmax.iloc[grid_index]
     sph_data = sph.iloc[grid_index]
     
     # Create a dictionary to hold the combined data for this station
@@ -80,6 +86,8 @@ def combine_data(station_info, windspeed, precip, srad, tmin, tmax, sph, swe_val
       'precip': precip_data['variable_value'],
       'tmin': tmin_data['variable_value'],
       'tmax': tmax_data['variable_value'],
+      'Rmin': rmin_data['variable_value'],
+      'Rmax': rmax_data['variable_value'],
       'SPH': sph_data['variable_value'],
       'SRAD': srad_data['variable_value'],
       'windspeed': grid_data['variable_value'],
@@ -93,21 +101,24 @@ def combine_data(station_info, windspeed, precip, srad, tmin, tmax, sph, swe_val
   # Convert the list of combined data into a DataFrame
   combined_df = pd.DataFrame(combined_data)
   
+  # Drop any duplicate rows and reset the index
+  combined_df = combined_df.drop_duplicates().reset_index(drop=True)
+
   return combined_df
 
 # Main function to execute the preprocessing
 def main():
   # Load data
-  windspeed, precip, srad, tmin, tmax, sph, station_info, swe_values = load_data()
+  windspeed, precip, srad, tmin, tmax, rmin, rmax, sph, station_info, swe_values = load_data()
   
   # Handle missing values
-  windspeed, precip, srad, tmin, tmax, sph = handle_missing_values(windspeed, precip, srad, tmin, tmax, sph)
+  windspeed, precip, srad, tmin, tmax, rmin, rmax, sph = handle_missing_values(windspeed, precip, srad, tmin, tmax, rmin, rmax, sph)
   
   # Spatial association of SNOTEL stations to grids
   station_info = associate_snotel_to_grids(station_info, windspeed, precip, srad, tmin, tmax, sph)
   
   # Combine data for each SNOTEL location
-  combined_data = combine_data(station_info, windspeed, precip, srad, tmin, tmax, sph, swe_values)
+  combined_data = combine_data(station_info, windspeed, precip, srad, tmin, tmax, rmin, rmax, sph, swe_values)
   
   # Save the combined dataset to a CSV
   combined_data.to_csv('combined_dataset.csv', index=False)
@@ -115,4 +126,4 @@ def main():
   print("Preprocessing complete. Combined dataset saved to 'combined_dataset.csv'.")
 
 if __name__ == "__main__":
-    main()
+  main()
