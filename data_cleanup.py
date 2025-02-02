@@ -1,6 +1,7 @@
 import pandas as pd
+import numpy as np
+from sklearn.impute import KNNImputer
 from sklearn.neighbors import BallTree
-
 
 # Define meteorological variables
 variables = ['precip', 'Rmax', 'Rmin', 'SPH', 'SRAD', 'tmax', 'tmin', 'windspeed']
@@ -23,7 +24,7 @@ merged_meteo = merged_meteo.pivot_table(
     index=['date', 'latitude', 'longitude'],
     columns='variable',
     values='value',
-    aggfunc='first' #duplication guard
+    aggfunc='first'  # duplication guard
 ).reset_index()
 
 # Load station data
@@ -79,12 +80,19 @@ merged_data = merged_data.drop(columns=['station_lat', 'station_lon', 'grid_lat'
 # Ensure 'date' is in datetime format for proper sorting
 merged_data['date'] = pd.to_datetime(merged_data['date'])
 
-# Define the preferred column order
-column_order = ['date','latitude', 'longitude', 'SWE', 'precip', 'tmin', 'tmax',
-                 'SPH', 'SRAD', 'Rmax', 'Rmin', 'windspeed', 'Elevation', 'Southness' ]
+# **Step 1: Temporal Interpolation for Missing Values**
+merged_data = merged_data.sort_values(by=['date', 'latitude', 'longitude'])
+merged_data[variables] = merged_data[variables].interpolate(method='linear')
 
-# Sort by date in ascending order
-merged_data = merged_data.sort_values(by='date', ascending=True)
+# **Step 2: KNN Imputation for Spatially Missing Values**
+knn_imputer = KNNImputer(n_neighbors=5, weights="distance")
+merged_data[variables] = knn_imputer.fit_transform(merged_data[variables])
+
+# Define the preferred column order
+column_order = ['date', 'latitude', 'longitude', 'SWE', 'precip', 'tmin', 'tmax',
+                'SPH', 'SRAD', 'Rmax', 'Rmin', 'windspeed', 'Elevation', 'Southness']
 
 # Output to CSV file
-merged_data[column_order].to_csv("./merged_data.csv", index=False)
+merged_data[column_order].to_csv("./merged_data_filled.csv", index=False)
+
+print("Missing values have been filled. Data saved as 'merged_data_filled.csv'.")
