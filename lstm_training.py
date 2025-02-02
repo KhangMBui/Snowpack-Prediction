@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from torch.utils.data import DataLoader, TensorDataset
 
 #define the LTSM model
 class LSTMModel(nn.Module):
@@ -50,39 +52,55 @@ def main():
     hidden_size = 50
     num_layers = 2
     output_size = 1
-    num_epochs = 50
+    num_epochs = 10000
     batch_size = 32
     learning_rate = 0.001
 
+    # Create DataLoader for training data
+    train_dataset = TensorDataset(X_train, y_train)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
     #Initialize the model, loss function, and optimizer
     model = LSTMModel(input_size, hidden_size, num_layers, output_size)
-    
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
     # Train the model
     for epoch in range(num_epochs):
         model.train()
-
-        outputs = model(X_train.unsqueeze(1))
-        loss = criterion(outputs, y_train)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        for X_batch, y_batch in train_loader:
+            outputs = model(X_batch.unsqueeze(1))
+            loss = criterion(outputs, y_batch)
+            
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
             
         if (epoch+1) % 10 == 0:
             print(f'Epoch: {epoch+1}/{num_epochs}, Loss: {loss.item():.4f}') 
 
     # Evaluate the model
     model.eval()
+
+    target_scaler = MinMaxScaler()
+    target_scaler.fit_transform(target.values.reshape(-1, 1))
     with torch.no_grad():
         predictions = model(X_test.unsqueeze(1)).numpy()
-  
+        predictions_original_scale = target_scaler.inverse_transform(predictions)
+    
+    # Calculate performance metrics
+    mae = mean_absolute_error(y_test, predictions_original_scale)
+    mse = mean_squared_error(y_test, predictions_original_scale)
+    rmse = np.sqrt(mse)
+
+    print(f'Mean Absolute Error (MAE): {mae:.4f}')
+    print(f'Mean Squared Error (MSE): {mse:.4f}')
+    print(f'Root Mean Squared Error (RMSE): {rmse:.4f}')
+
     #Create a DataFrame to store the predictions
     predictions_df = pd.DataFrame(X_test.numpy(), columns=numerical_features.columns)
     predictions_df['SWE_Actual'] = y_test.numpy()
-    predictions_df['SWE_Predicted'] = predictions
+    predictions_df['SWE_Predicted'] = predictions_original_scale
 
     #Save the predictions to a CSV file   
     predictions_formatted_df = pd.DataFrame({
