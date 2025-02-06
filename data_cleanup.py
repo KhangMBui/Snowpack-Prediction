@@ -1,98 +1,145 @@
 import pandas as pd
 import numpy as np
-from sklearn.impute import KNNImputer
-from sklearn.neighbors import BallTree
+from sklearn.impute import SimpleImputer
+from scipy.spatial.distance import cdist
 
-# Define meteorological variables
-variables = ['precip', 'Rmax', 'Rmin', 'SPH', 'SRAD', 'tmax', 'tmin', 'windspeed']
+# 1. Load the datasets
+def load_data():
+    # Load meteorological data
+    windspeed = pd.read_csv('./input_data/meteorological_data/Modified_Output_windspeed.csv')
+    precip = pd.read_csv('./input_data/meteorological_data/Modified_Output_precip.csv')
+    srad = pd.read_csv('./input_data/meteorological_data/Modified_Output_SRAD.csv')
+    tmin = pd.read_csv('./input_data/meteorological_data/Modified_Output_tmin.csv')
+    tmax = pd.read_csv('./input_data/meteorological_data/Modified_Output_tmax.csv')
+    rmin = pd.read_csv('./input_data/meteorological_data/Modified_Output_Rmin.csv')
+    rmax = pd.read_csv('./input_data/meteorological_data/Modified_Output_Rmax.csv')
+    sph = pd.read_csv('./input_data/meteorological_data/Modified_Output_SPH.csv')
 
-# Load meteorological data
-meteo_dfs = []
-for var in variables:
-    file_path = f"input_data/meteorological_data/Modified_Output_{var}.csv"
-    df = pd.read_csv(file_path).rename(columns={
-        'lat': 'latitude', 
-        'lon': 'longitude',
-        'variable_value': 'value'})
-    df['variable'] = var
-    meteo_dfs.append(df)
+    # Load SWE data and Station Info
+    station_info = pd.read_csv('./input_data/swe_data/Station_Info.csv')
+    swe_values = pd.read_csv('./input_data/swe_data/SWE_values_all.csv')
 
-merged_meteo = pd.concat(meteo_dfs)
+    return windspeed, precip, srad, tmin, tmax, rmin, rmax, sph, station_info, swe_values
 
-# Pivot to wide format (one column per variable)
-merged_meteo = merged_meteo.pivot_table(
-    index=['date', 'latitude', 'longitude'],
-    columns='variable',
-    values='value',
-    aggfunc='first'  # duplication guard
-).reset_index()
+# 2. Handle Missing Values (Imputation)
+def handle_missing_values(windspeed, precip, srad, tmin, tmax, rmin, rmax, sph):
+    # Use mean imputation for missing values
+    imputer = SimpleImputer(strategy='mean')
+    
+    # Impute missing values in each meteorological dataset
+    windspeed['variable_value'] = imputer.fit_transform(windspeed[['variable_value']])
+    precip['variable_value'] = imputer.fit_transform(precip[['variable_value']])
+    srad['variable_value'] = imputer.fit_transform(srad[['variable_value']])
+    tmin['variable_value'] = imputer.fit_transform(tmin[['variable_value']])
+    tmax['variable_value'] = imputer.fit_transform(tmax[['variable_value']])
+    rmin['variable_value'] = imputer.fit_transform(rmin[['variable_value']])
+    rmax['variable_value'] = imputer.fit_transform(rmax[['variable_value']])
+    sph['variable_value'] = imputer.fit_transform(sph[['variable_value']])
+    
+    return windspeed, precip, srad, tmin, tmax, rmin, rmax, sph
+# 3. Spatial Association of SNOTEL Locations to Grids
+def associate_snotel_to_grids(station_info, meteorological_datasets):
+    # Extract latitudes and longitudes for both SNOTEL stations and grid points
+    snotel_locations = station_info[['Latitude', 'Longitude']].values
+    
+    # Initialize a dictionary to store closest grid indices for each meteorological dataset
+    closest_grid_indices = {}
 
-# Load station data
-station_info = pd.read_csv("input_data/swe_data/Station_Info.csv").rename(columns={
-    'Latitude': 'latitude',
-    'Longitude': 'longitude'
-})
-swe_value = pd.read_csv("input_data/swe_data/SWE_values_all.csv").rename(columns={
-    'Date': 'date',
-    'Latitude': 'latitude',
-    'Longitude': 'longitude'
-})
+    for dataset_name, dataset in meteorological_datasets.items():
+        grid_points = dataset[['lat', 'lon']].values  # Assuming all datasets have the same grid points
 
-# Spatial join to link stations with grid points
-grid_points = merged_meteo[['latitude', 'longitude']].drop_duplicates().values
+        # Calculate Euclidean distance between SNOTEL stations and grid points
+        distances = cdist(snotel_locations, grid_points, metric='euclidean')
+        
+        # Find the closest grid point for each SNOTEL station
+        closest_grid_indices[dataset_name] = np.argmin(distances, axis=1)
+        
+        # Debugging: Print the shape and first few distances for validation
+        # print(f"Distances for {dataset_name}: {distances.shape}")
+        # print(f"Closest grid indices for {dataset_name}: {closest_grid_indices[dataset_name][:5]}")
+    
+    # Add the closest grid indices for each dataset to the station_info DataFrame
+    for dataset_name, indices in closest_grid_indices.items():
+        station_info[f'closest_grid_index_{dataset_name}'] = indices
+    
+    return station_info
 
-tree = BallTree(grid_points, leaf_size=2)
-stations = station_info[['latitude', 'longitude']].values
-_, indices = tree.query(stations, k=1)
-station_to_grid = grid_points[indices.flatten()]
+# 4. Combine Data (Attach Static and Meteorological Features to Each SNOTEL Station)
+def combine_data(station_info, meteorological_datasets, swe_values):
+    # Merge station_info with swe_values based on Latitude and Longitude
+    station_info = pd.merge(station_info, swe_values[['Latitude', 'Longitude', 'SWE']], on=['Latitude', 'Longitude'], how='left')
+    
+    # Create a combined dataframe for each SNOTEL station
+    combined_data = []
 
-# Create grid mapping DataFrame
-grid_mapping = pd.DataFrame({
-    'station_lat': station_info['latitude'],
-    'station_lon': station_info['longitude'],
-    'grid_lat': station_to_grid[:, 0],
-    'grid_lon': station_to_grid[:, 1],
-    'Elevation': station_info['Elevation'], 
-    'Southness': station_info['Southness']
-})
+    for index, station in station_info.iterrows():
+        # Get the closest grid indices for each dataset
+        combined_row = {
+            'date': None,  # We will fill this in based on the data
+            'lat': station['Latitude'],
+            'lon': station['Longitude'],
+            'SWE': station['SWE'],
+            'elevation': station['Elevation'],
+            'southness': station['Southness']
+        }
+        
+        for dataset_name, dataset in meteorological_datasets.items():
+            grid_index = station[f'closest_grid_index_{dataset_name}']
+            grid_data = dataset.iloc[grid_index]
+            
+            # Extract data for the nearest grid point
+            combined_row[f'{dataset_name}_value'] = grid_data['variable_value']
+            if combined_row['date'] is None:
+                combined_row['date'] = grid_data['date']  # Assume all datasets share the same date
+        
+        # Append the combined row to the list
+        combined_data.append(combined_row)
 
-# Merge all data
-merged_data = (
-    swe_value
-    .merge(grid_mapping, left_on=['latitude', 'longitude'], right_on=['station_lat', 'station_lon'])
-    .merge(
-        merged_meteo,
-        left_on=['date', 'grid_lat', 'grid_lon'],
-        right_on=['date', 'latitude', 'longitude'],
-        suffixes=('_station', '_grid')  # Add suffixes to resolve conflicts
-    )
-    # Rename columns to retain latitude/longitude
-    .rename(columns={
-        'latitude_grid': 'latitude',
-        'longitude_grid': 'longitude'
-    })
-    .drop(columns=['latitude_station', 'longitude_station'])
-)
+    # Convert the list of combined data into a DataFrame
+    combined_df = pd.DataFrame(combined_data)
+    
+    # Drop any duplicate rows and reset the index
+    combined_df = combined_df.drop_duplicates().reset_index(drop=True)
 
-# Drop unnecessary columns
-merged_data = merged_data.drop(columns=['station_lat', 'station_lon', 'grid_lat', 'grid_lon'])
+    # Make sure the 'date' column is properly sorted to preserve the full time range
+    combined_df['date'] = pd.to_datetime(combined_df['date'], errors='coerce')
+    
+    # Replace invalid dates (NaT) with "NAT"
+    combined_df['date'] = combined_df['date'].fillna("NAT")
+    
+    combined_df = combined_df.sort_values(by='date', ascending=True)
 
-# Ensure 'date' is in datetime format for proper sorting
-merged_data['date'] = pd.to_datetime(merged_data['date'])
+    return combined_df
 
-# **Step 1: Temporal Interpolation for Missing Values**
-merged_data = merged_data.sort_values(by=['date', 'latitude', 'longitude'])
-merged_data[variables] = merged_data[variables].interpolate(method='linear')
+# Main function to execute the preprocessing
+def main():
+    # Load data
+    windspeed, precip, srad, tmin, tmax, rmin, rmax, sph, station_info, swe_values = load_data()
+    
+    # Handle missing values
+    meteorological_datasets = {
+        'windspeed': windspeed,
+        'precip': precip,
+        'srad': srad,
+        'tmin': tmin,
+        'tmax': tmax,
+        'rmin': rmin,
+        'rmax': rmax,
+        'sph': sph
+    }
+    
+    windspeed, precip, srad, tmin, tmax, rmin, rmax, sph = handle_missing_values(windspeed, precip, srad, tmin, tmax, rmin, rmax, sph)
+    
+    # Spatial association of SNOTEL stations to grids
+    station_info = associate_snotel_to_grids(station_info, meteorological_datasets)
+    
+    # Combine data for each SNOTEL location
+    combined_data = combine_data(station_info, meteorological_datasets, swe_values)
+    
+    # Save the combined dataset to a CSV
+    combined_data.to_csv('combined_dataset.csv', index=False)
+    
+    print("Preprocessing complete. Combined dataset saved to 'combined_dataset.csv'.")
 
-# **Step 2: KNN Imputation for Spatially Missing Values**
-knn_imputer = KNNImputer(n_neighbors=5, weights="distance")
-merged_data[variables] = knn_imputer.fit_transform(merged_data[variables])
-
-# Define the preferred column order
-column_order = ['date', 'latitude', 'longitude', 'SWE', 'precip', 'tmin', 'tmax',
-                'SPH', 'SRAD', 'Rmax', 'Rmin', 'windspeed', 'Elevation', 'Southness']
-
-# Output to CSV file
-merged_data[column_order].to_csv("./merged_data_filled.csv", index=False)
-
-print("Missing values have been filled. Data saved as 'merged_data_filled.csv'.")
+if __name__ == "__main__":
+    main()
